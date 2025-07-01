@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fairfax Connector Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100vh; width: 100vw; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([38.85, -77.3], 11);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map);
+
+    const stopLayer = L.layerGroup().addTo(map);
+    const routeLayer = L.layerGroup().addTo(map);
+    const vehicleLayer = L.layerGroup().addTo(map);
+    const vehicleMarkers = new Map();
+
+    fetch("/static/stops.json").then(res => res.json()).then(data => {
+      data.forEach(stop => {
+        L.circleMarker([stop.lat, stop.lon], {
+          radius: 3, color: "red", fillOpacity: 0.7
+        }).addTo(stopLayer).bindPopup(`Stop: ${stop.stop_name}`);
+      });
+    });
+
+    fetch("/static/shapes.json").then(res => res.json()).then(shapes => {
+      Object.entries(shapes).forEach(([id, points]) => {
+        L.polyline(points, { color: "green", weight: 2, opacity: 0.7 }).addTo(routeLayer);
+      });
+    });
+
+    let tripUpdates = {};
+
+    function loadTripUpdates() {
+      fetch("/trip_updates?ts=" + Date.now())
+        .then(res => res.json())
+        .then(data => { tripUpdates = data; updatePopups(); });
+    }
+
+    function loadVehicles() {
+      fetch("/vehicle_positions?ts=" + Date.now())
+        .then(res => res.json())
+        .then(data => {
+          const ids = new Set();
+          data.forEach(v => {
+            ids.add(v.id);
+            let marker = vehicleMarkers.get(v.id);
+            if (marker) {
+              marker.setLatLng([v.lat, v.lon]);
+            } else {
+              marker = L.circleMarker([v.lat, v.lon], {
+                radius: 6, color: "blue"
+              }).addTo(vehicleLayer);
+              vehicleMarkers.set(v.id, marker);
+            }
+          });
+          // Remove old
+          for (let [id, m] of vehicleMarkers) {
+            if (!ids.has(id)) {
+              vehicleLayer.removeLayer(m);
+              vehicleMarkers.delete(id);
+            }
+          }
+          updatePopups();
+        });
+    }
+
+    function updatePopups() {
+      vehicleMarkers.forEach((marker, id) => {
+        const trip = tripUpdates[id] || {};
+        let eta = trip.arrival_time ? new Date(trip.arrival_time * 1000).toLocaleTimeString() : 'N/A';
+        marker.bindPopup(
+          `Bus ID: ${id}<br>` +
+          `Next Stop: ${trip.next_stop || 'N/A'}<br>` +
+          `Last Stop: ${trip.last_stop || 'N/A'}<br>` +
+          `ETA: ${eta}`
+        );
+      });
+    }
+
+    loadTripUpdates();
+    loadVehicles();
+    setInterval(() => {
+      loadTripUpdates();
+      loadVehicles();
+    }, 15000);
+  </script>
+</body>
+</html>
